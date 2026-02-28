@@ -8,6 +8,7 @@
  *   /pm:prd <idea>       — Generate a PRD
  *   /pm:refine           — Refine current Linear ticket
  *   /pm:prioritize       — RICE-score open items
+ *   /pm:status           — Cross-reference Linear board with GitHub reality
  *
  * Tools:
  *   pm_signals — Fetch product signals from Linear + GitHub
@@ -434,4 +435,237 @@ export default function pmExtension(pi: ExtensionAPI) {
 			);
 		},
 	});
+
+	// ── Status: Linear ↔ GitHub cross-reference ──────────────────────────
+
+	pi.registerCommand("pm:status", {
+		description: "Cross-reference Linear board with GitHub reality — find discrepancies",
+		handler: async (_args, ctx) => {
+			const status = fetchProjectStatus();
+
+			await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+				const inner = new Container();
+				const accent = (s: string) => theme.fg("accent", s);
+				const dim = (s: string) => theme.fg("dim", s);
+				const warn = (s: string) => theme.fg("warning", s);
+				const err = (s: string) => theme.fg("error", s);
+				const ok = (s: string) => theme.fg("success", s);
+
+				inner.addChild(new Text(" " + accent(theme.bold("📋 Project Status — Linear ↔ GitHub")), 0, 0));
+				inner.addChild(new Text("", 0, 0));
+
+				if (status.tickets.length === 0) {
+					inner.addChild(new Text(warn(" No active tickets found. Check LINEAR_API_KEY + LINEAR_TEAM_ID"), 0, 0));
+				} else {
+					// Group by state
+					const groups: Record<string, typeof status.tickets> = {};
+					for (const t of status.tickets) {
+						const g = t.linearState || "unknown";
+						if (!groups[g]) groups[g] = [];
+						groups[g]!.push(t);
+					}
+
+					const stateOrder = ["In Progress", "In Review", "Done", "Todo", "Backlog"];
+					const sortedStates = Object.keys(groups).sort((a, b) => {
+						const ai = stateOrder.indexOf(a);
+						const bi = stateOrder.indexOf(b);
+						return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+					});
+
+					for (const state of sortedStates) {
+						const tickets = groups[state]!;
+						inner.addChild(new Text(" " + accent(theme.bold(`${state} (${tickets.length})`)), 0, 0));
+
+						for (const t of tickets) {
+							// Build status line
+							let ghStatus = "";
+							if (t.pr) {
+								const ciIcon = t.ci === "pass" ? ok("✓") : t.ci === "fail" ? err("✗") : dim("⟳");
+								const prLabel = t.pr.isDraft ? dim("draft") : t.pr.reviewDecision === "APPROVED" ? ok("approved") : warn("review");
+								ghStatus = ` PR #${t.pr.number} ${prLabel} CI:${ciIcon}`;
+							} else if (t.hasBranch) {
+								ghStatus = dim(" branch only, no PR");
+							} else {
+								ghStatus = dim(" no branch");
+							}
+
+							// Flag discrepancies
+							let flag = "";
+							for (const d of t.discrepancies) {
+								flag += " " + warn(`⚠ ${d}`);
+							}
+
+							inner.addChild(new Text(
+								`  ${dim(t.id)} ${t.title.slice(0, 50)}` + ghStatus + flag,
+								0, 0
+							));
+						}
+						inner.addChild(new Text("", 0, 0));
+					}
+				}
+
+				// Summary
+				if (status.discrepancies.length > 0) {
+					inner.addChild(new Text(" " + warn(theme.bold(`⚠ ${status.discrepancies.length} discrepancies`)), 0, 0));
+					for (const d of status.discrepancies.slice(0, 8)) {
+						inner.addChild(new Text("  " + warn(`• ${d}`), 0, 0));
+					}
+					inner.addChild(new Text("", 0, 0));
+				} else {
+					inner.addChild(new Text(" " + ok("✓ Board and GitHub are in sync"), 0, 0));
+					inner.addChild(new Text("", 0, 0));
+				}
+
+				inner.addChild(new Text(dim(" esc close  │  /pm:status to refresh"), 0, 0));
+
+				const box = new BoxedOverlay(inner, (s) => theme.fg("accent", s));
+				return {
+					render: (w) => box.render(w),
+					invalidate: () => box.invalidate(),
+					handleInput: (data) => { if (data === "\x1b" || data === "q") done(); },
+				};
+			}, { overlay: true });
+		},
+	});
+}
+
+// ── Status cross-reference fetcher ───────────────────────────────────────────
+
+interface TicketStatus {
+	id: string;
+	title: string;
+	linearState: string;
+	linearStateType: string;
+	assignee: string;
+	hasBranch: boolean;
+	pr: { number: number; isDraft: boolean; reviewDecision: string; merged: boolean } | null;
+	ci: "pass" | "fail" | "pending" | "none";
+	discrepancies: string[];
+}
+
+interface ProjectStatus {
+	tickets: TicketStatus[];
+	discrepancies: string[];
+}
+
+function fetchProjectStatus(): ProjectStatus {
+	const teamId = process.env.LINEAR_TEAM_ID;
+	const tickets: TicketStatus[] = [];
+	const discrepancies: string[] = [];
+
+	// Fetch active Linear issues (not backlog, not cancelled)
+	if (!process.env.LINEAR_API_KEY || !teamId) {
+		return { tickets: [], discrepancies: ["LINEAR_API_KEY or LINEAR_TEAM_ID not set"] };
+	}
+
+	const data = linearQuery(`{
+		issues(
+			filter: {
+				team: { key: { eq: "${teamId}" } }
+				state: { type: { in: ["started", "unstarted", "completed"] } }
+			}
+			first: 100
+			orderBy: updatedAt
+		) {
+			nodes {
+				identifier title
+				state { name type }
+				assignee { name }
+				branchName
+				updatedAt
+			}
+		}
+	}`);
+
+	if (!data?.issues?.nodes) {
+		return { tickets: [], discrepancies: ["Failed to fetch Linear data"] };
+	}
+
+	// Fetch all GitHub PRs with branch info and CI
+	const prsRaw = gh("pr", "list", "--state", "all", "--limit", "100",
+		"--json", "number,headRefName,state,isDraft,reviewDecision,mergedAt,statusCheckRollup");
+	let prs: any[] = [];
+	if (prsRaw) {
+		try { prs = JSON.parse(prsRaw); } catch {}
+	}
+
+	// Fetch branch list
+	const branchesRaw = gitCmd("branch", "-r", "--format", "%(refname:short)");
+	const branches = new Set(branchesRaw.split("\n").map(b => b.replace("origin/", "").trim()));
+
+	// Cross-reference each Linear issue
+	for (const issue of data.issues.nodes) {
+		const id = issue.identifier;
+		const state = issue.state?.name || "Unknown";
+		const stateType = issue.state?.type || "unknown";
+		const branchName = issue.branchName || "";
+		const idLower = id.toLowerCase();
+
+		// Find matching PR by branch name or ticket ID in branch
+		const matchingPr = prs.find((p: any) => {
+			const head = (p.headRefName || "").toLowerCase();
+			return head === branchName.toLowerCase() ||
+			       head.includes(idLower) ||
+			       head.includes(idLower.replace("-", ""));
+		});
+
+		// Check if branch exists
+		const hasBranch = branchName
+			? branches.has(branchName) || [...branches].some(b => b.toLowerCase().includes(idLower))
+			: [...branches].some(b => b.toLowerCase().includes(idLower));
+
+		// CI status
+		let ci: TicketStatus["ci"] = "none";
+		if (matchingPr?.statusCheckRollup) {
+			const checks = matchingPr.statusCheckRollup;
+			if (Array.isArray(checks) && checks.length > 0) {
+				const failed = checks.some((c: any) => c.conclusion === "FAILURE");
+				const pending = checks.some((c: any) => c.status === "IN_PROGRESS" || c.status === "QUEUED");
+				ci = failed ? "fail" : pending ? "pending" : "pass";
+			}
+		}
+
+		const pr = matchingPr ? {
+			number: matchingPr.number,
+			isDraft: matchingPr.isDraft,
+			reviewDecision: matchingPr.reviewDecision || "",
+			merged: !!matchingPr.mergedAt,
+		} : null;
+
+		// Detect discrepancies
+		const discs: string[] = [];
+
+		if (stateType === "started" && !hasBranch && !pr) {
+			discs.push(`${id} "In Progress" but no branch/PR`);
+		}
+		if (stateType === "started" && pr?.merged) {
+			discs.push(`${id} "In Progress" but PR already merged`);
+		}
+		if (stateType === "completed" && pr && !pr.merged) {
+			discs.push(`${id} "Done" in Linear but PR not merged`);
+		}
+		if (pr && ci === "fail") {
+			discs.push(`${id} CI failing on PR #${pr.number}`);
+		}
+		if (stateType === "unstarted" && pr && !pr.isDraft) {
+			discs.push(`${id} "Todo" but has active PR #${pr.number}`);
+		}
+
+		discrepancies.push(...discs);
+
+		// Only include non-backlog tickets
+		tickets.push({
+			id,
+			title: issue.title || "",
+			linearState: state,
+			linearStateType: stateType,
+			assignee: issue.assignee?.name || "",
+			hasBranch,
+			pr,
+			ci,
+			discrepancies: discs,
+		});
+	}
+
+	return { tickets, discrepancies };
 }
