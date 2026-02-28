@@ -213,14 +213,15 @@ export default function tmuxWorktreesExtension(pi: ExtensionAPI) {
 	// ── /split command ────────────────────────────────────────────────────
 
 	pi.registerCommand("split", {
-		description: "Split tmux pane with the same session context. Usage: /split [h|v]",
+		description: "Split tmux pane and open pi. New splits stack vertically on the right. Usage: /split [h|v]",
 		handler: async (args, ctx) => {
 			if (!isInTmux) {
 				ctx.ui.notify("Not inside tmux — cannot split", "warning");
 				return;
 			}
 
-			const orientation = args.trim() === "v" ? "v" : "h";
+			const arg = args.trim().toLowerCase();
+			const orientation = arg === "h" ? "h" : "v"; // default vertical (stack right)
 
 			// Get current session file and copy it
 			const sessionFile = ctx.sessionManager.getSessionFile();
@@ -240,17 +241,30 @@ export default function tmuxWorktreesExtension(pi: ExtensionAPI) {
 			}
 
 			const ticket = process.env.PI_LINEAR_TICKET ? `PI_LINEAR_TICKET=${process.env.PI_LINEAR_TICKET} ` : "";
-			const newPane = tmuxRun(
-				"split-window", `-${orientation}`, "-c", ctx.cwd,
-				`${ticket}pi --session ${JSON.stringify(newSessionFile)}`
-			);
+			const piCmd = `${ticket}pi --session ${JSON.stringify(newSessionFile)}`;
 
-			if (!newPane) ctx.ui.notify("Failed to split pane", "error");
+			// If we already have splits, target the rightmost pane so new ones stack there
+			const paneCount = tmuxRun("display-message", "-p", "#{window_panes}");
+			if (orientation === "v" && parseInt(paneCount || "1") > 1) {
+				// Find the last pane (rightmost) and split it horizontally to stack below
+				const lastPane = tmuxRun("list-panes", "-F", "#{pane_id}", "|", "tail", "-1");
+				// Use -h on the last pane to stack vertically within the right column
+				const r = spawnSync("tmux", ["split-window", "-h", "-t", lastPane || "", "-c", ctx.cwd, piCmd],
+					{ encoding: "utf-8" });
+				if (r.status !== 0) {
+					// Fallback: just split current pane
+					spawnSync("tmux", ["split-window", `-${orientation}`, "-c", ctx.cwd, piCmd],
+						{ encoding: "utf-8" });
+				}
+			} else {
+				spawnSync("tmux", ["split-window", `-${orientation}`, "-c", ctx.cwd, piCmd],
+					{ encoding: "utf-8" });
+			}
 		},
 	});
 
 	pi.registerShortcut(Key.ctrlAlt("s"), {
-		description: "Split pane horizontally with same session context (Ctrl+Alt+S)",
+		description: "Split pane with same session context (Ctrl+Alt+S)",
 		handler: async (ctx) => {
 			const cmdCtx = ctx as ExtensionCommandContext;
 			if (!isInTmux) { cmdCtx.ui.notify("Not inside tmux", "warning"); return; }
@@ -264,7 +278,23 @@ export default function tmuxWorktreesExtension(pi: ExtensionAPI) {
 			try { copyFileSync(sessionFile, newSessionFile); } catch { cmdCtx.ui.notify("Failed to copy session", "error"); return; }
 
 			const ticket = process.env.PI_LINEAR_TICKET ? `PI_LINEAR_TICKET=${process.env.PI_LINEAR_TICKET} ` : "";
-			tmuxRun("split-window", "-h", "-c", cmdCtx.cwd, `${ticket}pi --session ${JSON.stringify(newSessionFile)}`);
+			const piCmd = `${ticket}pi --session ${JSON.stringify(newSessionFile)}`;
+
+			// Stack vertically on the right side
+			const paneCount = tmuxRun("display-message", "-p", "#{window_panes}");
+			if (parseInt(paneCount || "1") > 1) {
+				// Split the last (rightmost) pane horizontally to stack
+				const panes = tmuxRun("list-panes", "-F", "#{pane_id}");
+				const lastPane = panes?.split("\n").pop();
+				if (lastPane) {
+					spawnSync("tmux", ["split-window", "-v", "-t", lastPane, "-c", cmdCtx.cwd, piCmd],
+						{ encoding: "utf-8" });
+					return;
+				}
+			}
+			// First split: vertical (creates left primary + right secondary)
+			spawnSync("tmux", ["split-window", "-h", "-c", cmdCtx.cwd, piCmd],
+				{ encoding: "utf-8" });
 		},
 	});
 
