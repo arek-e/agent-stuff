@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+#
+# pi-tmux — launch pi inside a tmux session, optionally creating a git worktree
+#
+# Usage:
+#   pi-tmux                                          # attach to session for current branch
+#   pi-tmux eng-155-build-kanban-view-component      # create worktree + session
+#   pi-tmux eng-155-build-kanban-view-component -m sonnet  # extra args passed to pi
+
+set -euo pipefail
+
+# If first arg looks like a flag, pass everything straight to pi (no worktree)
+if [[ "${1:-}" == -* ]]; then
+  BRANCH_ARG=""
+  # leave all args in "$@" for pi
+else
+  BRANCH_ARG="${1:-}"
+  shift 2>/dev/null || true  # remaining args for pi
+fi
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+die() { echo "pi-tmux: $*" >&2; exit 1; }
+
+sanitize() {
+  # lowercase, replace non-alphanum with dash, collapse dashes, trim
+  echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//'
+}
+
+parse_ticket() {
+  # eng-155-build-foo → ENG-155
+  if [[ "$1" =~ ^([a-zA-Z]+-[0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]'
+  fi
+}
+
+get_project_name() {
+  local toplevel
+  toplevel="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not in a git repository"
+  basename "$toplevel"
+}
+
+get_current_branch() {
+  git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "detached"
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+# Must be in a git repo
+git rev-parse --git-dir >/dev/null 2>&1 || die "not in a git repository"
+
+PROJECT="$(get_project_name)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+WORKTREE_DIR=""
+
+if [[ -n "$BRANCH_ARG" ]]; then
+  # Create worktree from branch name
+  WORKTREE_DIR="$(dirname "$REPO_ROOT")/$BRANCH_ARG"
+
+  if [[ -d "$WORKTREE_DIR" ]]; then
+    echo "pi-tmux: worktree already exists at $WORKTREE_DIR"
+  else
+    echo "pi-tmux: creating worktree at $WORKTREE_DIR"
+    git worktree add "$WORKTREE_DIR" -b "$BRANCH_ARG" 2>/dev/null \
+      || git worktree add "$WORKTREE_DIR" "$BRANCH_ARG" 2>/dev/null \
+      || die "failed to create worktree for $BRANCH_ARG"
+  fi
+
+  BRANCH="$BRANCH_ARG"
+  TICKET="$(parse_ticket "$BRANCH_ARG")"
+else
+  BRANCH="$(get_current_branch)"
+  WORKTREE_DIR="$(git rev-parse --show-toplevel)"
+  TICKET="$(parse_ticket "$BRANCH")"
+fi
+
+SESSION_NAME="pi-$(sanitize "$PROJECT")-$(sanitize "$BRANCH")"
+# tmux session names can't contain dots
+SESSION_NAME="${SESSION_NAME//./-}"
+# truncate to reasonable length
+SESSION_NAME="${SESSION_NAME:0:80}"
+
+# Export env vars for the extension
+export PI_TMUX_SESSION="$SESSION_NAME"
+export PI_TMUX_PROJECT="$PROJECT"
+[[ -n "${TICKET:-}" ]] && export PI_LINEAR_TICKET="$TICKET"
+
+# ── Launch ───────────────────────────────────────────────────────────────────
+
+if [[ -n "${TMUX:-}" ]]; then
+  # Already inside tmux — just run pi directly
+  echo "pi-tmux: already in tmux, running pi in $WORKTREE_DIR"
+  cd "$WORKTREE_DIR"
+  exec pi "$@"
+fi
+
+if tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
+  # Session exists — attach
+  echo "pi-tmux: attaching to existing session $SESSION_NAME"
+  exec tmux attach-session -t "=$SESSION_NAME"
+else
+  # Create new session running pi
+  echo "pi-tmux: creating session $SESSION_NAME in $WORKTREE_DIR"
+
+  # Build env string for tmux
+  TMUX_ENV=(-e "PI_TMUX_SESSION=$SESSION_NAME" -e "PI_TMUX_PROJECT=$PROJECT")
+  [[ -n "${TICKET:-}" ]] && TMUX_ENV+=(-e "PI_LINEAR_TICKET=$TICKET")
+
+  exec tmux new-session -s "$SESSION_NAME" -c "$WORKTREE_DIR" \
+    "${TMUX_ENV[@]}" \
+    "pi $*; exec $SHELL"
+fi
