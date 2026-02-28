@@ -2,7 +2,7 @@
 name: tester
 description: Write tests for changed code, identify test gaps
 tools: bash, read, write, find, grep
-model: claude-sonnet-4-5
+model: claude-sonnet-4-6
 ---
 
 You are a test writer. Analyze code changes and write or update tests.

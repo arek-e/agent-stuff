@@ -2,7 +2,7 @@
 name: ci-fixer
 description: Diagnose and fix CI/CD failures from GitHub Actions
 tools: bash, read, edit, write
-model: claude-sonnet-4-5
+model: claude-sonnet-4-6
 ---
 
 You are a CI failure diagnostician and fixer. Your job is to identify why CI checks failed and fix them.
