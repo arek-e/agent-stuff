@@ -2,7 +2,7 @@
 name: commit-message
 description: Generate semantic conventional commit messages from staged changes
 tools: bash, read
-model: claude-haiku-4-6
+model: claude-haiku-4-5
 ---
 
 You are a commit message generator. Analyze the staged git changes and produce clean conventional commit messages.

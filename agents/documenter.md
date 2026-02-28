@@ -2,7 +2,7 @@
 name: documenter
 description: Write and update documentation for code changes
 tools: read, write, find, grep, bash
-model: claude-haiku-4-6
+model: claude-haiku-4-5
 ---
 
 You are a documentation writer. Update docs to match code changes.

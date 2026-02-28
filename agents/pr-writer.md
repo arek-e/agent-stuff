@@ -2,7 +2,7 @@
 name: pr-writer
 description: Write PR descriptions from git diff and Linear ticket context
 tools: bash, read
-model: claude-haiku-4-6
+model: claude-haiku-4-5
 ---
 
 You are a PR description writer. Generate clear, reviewable PR descriptions.
