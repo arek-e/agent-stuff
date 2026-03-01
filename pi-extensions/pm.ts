@@ -375,7 +375,7 @@ export default function pmExtension(pi: ExtensionAPI) {
 		description: "Analyze product signals (usage: /pm:signals [linear|github|all])",
 		handler: async (args, ctx) => {
 			const source = args?.trim() || "all";
-			ctx.ui.sendUserMessage(
+			pi.sendUserMessage(
 				`Use the signal-analyzer subagent to analyze product signals from ${source}. ` +
 				`First use the pm_signals tool with source="${source}" to fetch the data, ` +
 				`then analyze it: cluster themes, score impact, identify root causes, and suggest tickets.`
@@ -387,7 +387,7 @@ export default function pmExtension(pi: ExtensionAPI) {
 		description: "Generate Now/Next/Later roadmap (usage: /pm:roadmap [area])",
 		handler: async (args, ctx) => {
 			const area = args?.trim();
-			ctx.ui.sendUserMessage(
+			pi.sendUserMessage(
 				`Use the roadmap-manager subagent to generate a Now/Next/Later product roadmap` +
 				(area ? ` focused on ${area}` : "") +
 				`. Fetch data from Linear (cycles, backlog) and GitHub (open PRs), ` +
@@ -404,7 +404,7 @@ export default function pmExtension(pi: ExtensionAPI) {
 				ctx.ui.notify("Usage: /pm:prd <feature idea>", "warning");
 				return;
 			}
-			ctx.ui.sendUserMessage(
+			pi.sendUserMessage(
 				`Use the prd-writer subagent to generate a full PRD for: ${idea}\n\n` +
 				`Scan the codebase to ground technical considerations in reality. ` +
 				`Include problem statement, user stories, acceptance criteria, ` +
@@ -416,7 +416,7 @@ export default function pmExtension(pi: ExtensionAPI) {
 	pi.registerCommand("pm:refine", {
 		description: "Refine current Linear ticket with acceptance criteria, edge cases, tech notes",
 		handler: async (_args, ctx) => {
-			ctx.ui.sendUserMessage(
+			pi.sendUserMessage(
 				`Use the ticket-refiner subagent to improve the current Linear ticket. ` +
 				`First read the ticket with read_linear_ticket, then scan the codebase for context. ` +
 				`Add acceptance criteria (Given/When/Then), edge cases, technical notes ` +
@@ -428,7 +428,7 @@ export default function pmExtension(pi: ExtensionAPI) {
 	pi.registerCommand("pm:prioritize", {
 		description: "RICE-score open issues",
 		handler: async (_args, ctx) => {
-			ctx.ui.sendUserMessage(
+			pi.sendUserMessage(
 				`Fetch open issues from Linear and GitHub using the pm_signals tool with source="all". ` +
 				`Then apply RICE scoring (Reach × Impact × Confidence / Effort) to each item. ` +
 				`Output a prioritized table sorted by RICE score, with your reasoning for each score.`

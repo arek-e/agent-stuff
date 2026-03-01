@@ -75,7 +75,7 @@ async function runChain(steps: string[], ctx: ExtensionCommandContext): Promise<
 		const label = `Step ${i + 1}/${steps.length}`;
 
 		// Send the step as a user message — agent will execute it
-		ctx.ui.sendUserMessage(`[${label}] ${step}`);
+		pi.sendUserMessage(`[${label}] ${step}`);
 
 		// Wait for agent to finish this step before sending next
 		await ctx.waitForIdle();
