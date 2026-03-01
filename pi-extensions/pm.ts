@@ -133,7 +133,11 @@ function fetchHealthData(): HealthData {
 			team(id: "${teamId}") {
 				activeCycle {
 					name
-					progress { scope completed }
+					startsAt
+					endsAt
+					progress
+					scopeHistory
+					completedScopeHistory
 				}
 				issues(first: 200) {
 					nodes {
@@ -166,11 +170,16 @@ function fetchHealthData(): HealthData {
 			const openStates = ["backlog", "unstarted", "started"];
 			const totalOpen = openStates.reduce((sum, s) => sum + (stateCount[s] || 0), 0);
 
+			const scopeArr: number[] = cycle?.scopeHistory || [];
+			const completedArr: number[] = cycle?.completedScopeHistory || [];
+			const cycleScope = scopeArr.length > 0 ? scopeArr[scopeArr.length - 1]! : 0;
+			const cycleCompleted = completedArr.length > 0 ? completedArr[completedArr.length - 1]! : 0;
+
 			linear = {
-				cycleName: cycle?.name || "none",
-				cycleProgress: cycle?.progress?.completed || 0,
-				cycleScope: cycle?.progress?.scope || 0,
-				cycleCompleted: cycle?.progress?.completed || 0,
+				cycleName: cycle?.name || cycle?.startsAt?.slice(0, 10) || "none",
+				cycleProgress: cycle?.progress ?? 0,
+				cycleScope,
+				cycleCompleted,
 				issuesByState: stateCount,
 				totalOpen,
 				bugs,
