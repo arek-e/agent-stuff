@@ -292,12 +292,18 @@ export default function githubExtension(pi: ExtensionAPI) {
 				};
 			}
 
-			const confirmed = await ctx.ui.confirm(
-				"Create draft PR?",
-				`Title: ${title}\nBase: ${params.base || "default branch"}`,
-			);
-			if (!confirmed) {
-				return { content: [{ type: "text", text: "Cancelled." }], details: { success: false, cancelled: true } };
+			// Ensure branch is pushed (prevents gh interactive prompt)
+			const branch = getCurrentBranch(ctx.cwd);
+			if (branch) {
+				const pushResult = spawnSync("git", ["push", "-u", "origin", branch], {
+					cwd: ctx.cwd, encoding: "utf-8", timeout: 30000,
+				});
+				if (pushResult.status !== 0) {
+					return {
+						content: [{ type: "text", text: `Failed to push branch:\n${pushResult.stderr}` }],
+						details: { success: false, error: pushResult.stderr },
+					};
+				}
 			}
 
 			const args = ["pr", "create", "--draft", "--title", title, "--body", body];
