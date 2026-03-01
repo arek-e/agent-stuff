@@ -434,6 +434,113 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	// ── /fleet search <query> ────────────────────────────────────────────
+
+	pi.registerCommand("fleet-search", {
+		description: "Search all fleet agent scrollback. Usage: /fleet-search <query>",
+		async handler(args, ctx) {
+			const query = args.trim();
+			if (!query) {
+				ctx.ui.notify("Usage: /fleet-search <query>", "error");
+				return;
+			}
+
+			// Get all fleet windows
+			const { ok, output: windowList } = tmux("list-windows", "-t", FLEET_SESSION, "-F", "#{window_name}");
+			if (!ok || !windowList) {
+				ctx.ui.notify("No fleet session found", "warning");
+				return;
+			}
+
+			const windows = windowList.split("\n").filter(Boolean);
+			const matches: string[] = [];
+			const queryLower = query.toLowerCase();
+
+			for (const win of windows) {
+				const paneIds = tmux("list-panes", "-t", `${FLEET_SESSION}:${win}`, "-F", "#{pane_id}:#{pane_index}");
+				if (!paneIds.ok) continue;
+
+				for (const paneInfo of paneIds.output.split("\n").filter(Boolean)) {
+					const [paneId, paneIdx] = paneInfo.split(":");
+					const role = paneIdx === "1" ? "worker" : "reviewer";
+
+					// Capture full scrollback history (-S - means from start)
+					const capture = spawnSync("tmux", [
+						"capture-pane", "-t", paneId!, "-p", "-S", "-", "-E", "-",
+					], { encoding: "utf-8", timeout: 5000 });
+
+					if (capture.status !== 0 || !capture.stdout) continue;
+
+					const lines = capture.stdout.split("\n");
+					for (let i = 0; i < lines.length; i++) {
+						if (lines[i]!.toLowerCase().includes(queryLower)) {
+							matches.push(`**${win.toUpperCase()} ${role}** (line ${i + 1}): ${lines[i]!.trim().slice(0, 120)}`);
+						}
+					}
+				}
+			}
+
+			if (matches.length === 0) {
+				pi.sendUserMessage(`No matches for "${query}" across ${windows.length} fleet windows.`);
+				return;
+			}
+
+			const result = [
+				`## Fleet Search: "${query}"\n`,
+				`Found **${matches.length}** matches across ${windows.length} windows:\n`,
+				...matches.slice(0, 100), // cap at 100 results
+				matches.length > 100 ? `\n... and ${matches.length - 100} more` : "",
+			];
+			pi.sendUserMessage(result.join("\n"));
+		},
+	});
+
+	// ── /fleet logs <ticket> [worker|reviewer] ──────────────────────────
+
+	pi.registerCommand("fleet-logs", {
+		description: "Dump full scrollback for a ticket. Usage: /fleet-logs ENG-142 [worker|reviewer]",
+		async handler(args, ctx) {
+			const parts = args.trim().split(/\s+/);
+			const ticket = parts[0]?.toUpperCase();
+			const role = parts[1]?.toLowerCase() || "both";
+
+			if (!ticket) {
+				ctx.ui.notify("Usage: /fleet-logs ENG-142 [worker|reviewer]", "error");
+				return;
+			}
+
+			const win = ticket.toLowerCase();
+			const paneIds = tmux("list-panes", "-t", `${FLEET_SESSION}:${win}`, "-F", "#{pane_id}:#{pane_index}");
+			if (!paneIds.ok) {
+				ctx.ui.notify(`No fleet window for ${ticket}`, "warning");
+				return;
+			}
+
+			const panes = paneIds.output.split("\n").filter(Boolean);
+			const sections: string[] = [`## Fleet Logs: ${ticket}\n`];
+
+			for (const paneInfo of panes) {
+				const [paneId, paneIdx] = paneInfo.split(":");
+				const paneRole = paneIdx === "1" ? "worker" : "reviewer";
+
+				if (role !== "both" && role !== paneRole) continue;
+
+				const capture = spawnSync("tmux", [
+					"capture-pane", "-t", paneId!, "-p", "-S", "-", "-E", "-",
+				], { encoding: "utf-8", timeout: 5000 });
+
+				if (capture.status !== 0) continue;
+
+				// Get last 80 lines (or full output is too much)
+				const lines = capture.stdout.split("\n");
+				const tail = lines.slice(-80).join("\n");
+				sections.push(`### ${paneRole} (last ${Math.min(80, lines.length)} lines)\n\`\`\`\n${tail}\n\`\`\``);
+			}
+
+			pi.sendUserMessage(sections.join("\n\n"));
+		},
+	});
+
 	// ── /fleet [stop] [ticket] ───────────────────────────────────────────
 
 	pi.registerCommand("fleet", {
