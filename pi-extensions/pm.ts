@@ -199,7 +199,7 @@ function fetchSignals(source: string): { linear: any[]; github: any[] } {
 	if ((source === "linear" || source === "all") && getLinearKey() && teamId) {
 		const data = linearQuery(`{
 			issues(
-				filter: { team: { key: { eq: "${teamId}" } }, state: { type: { in: ["backlog", "unstarted"] } } }
+				filter: { team: { id: { eq: "${teamId}" } }, state: { type: { in: ["backlog", "unstarted"] } } }
 				first: 100
 				orderBy: createdAt
 			) {
@@ -588,7 +588,7 @@ function fetchProjectStatus(): ProjectStatus {
 	const data = linearQuery(`{
 		issues(
 			filter: {
-				team: { key: { eq: "${teamId}" } }
+				team: { id: { eq: "${teamId}" } }
 				state: { type: { in: ["started", "unstarted", "completed"] } }
 			}
 			first: 100
