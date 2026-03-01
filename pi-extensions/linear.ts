@@ -39,8 +39,21 @@ function getCurrentBranch(cwd: string): string | undefined {
 	}
 }
 
+function resolveSecret(name: string): string | undefined {
+	if (process.env[name]) return process.env[name];
+	try {
+		const r = spawnSync("security", ["find-generic-password", "-a", process.env.USER || "", "-s", name, "-w"],
+			{ encoding: "utf-8", timeout: 2000 });
+		if (r.status === 0 && r.stdout.trim()) {
+			process.env[name] = r.stdout.trim();
+			return r.stdout.trim();
+		}
+	} catch {}
+	return undefined;
+}
+
 async function fetchLinearTicket(ticketId: string): Promise<LinearTicket | undefined> {
-	const apiKey = process.env.LINEAR_API_KEY;
+	const apiKey = resolveSecret("LINEAR_API_KEY");
 	if (!apiKey) return undefined;
 
 	try {

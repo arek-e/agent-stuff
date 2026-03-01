@@ -26,8 +26,35 @@ import { Container, Text, type Component } from "@mariozechner/pi-tui";
 
 const LINEAR_API = "https://api.linear.app/graphql";
 
+/** Resolve a secret: process.env → macOS Keychain → ~/.config/linear/env */
+function resolveSecret(name: string): string | undefined {
+	if (process.env[name]) return process.env[name];
+	// macOS Keychain
+	try {
+		const r = spawnSync("security", ["find-generic-password", "-a", process.env.USER || "", "-s", name, "-w"],
+			{ encoding: "utf-8", timeout: 2000 });
+		if (r.status === 0 && r.stdout.trim()) {
+			process.env[name] = r.stdout.trim(); // cache for this session
+			return r.stdout.trim();
+		}
+	} catch {}
+	// ~/.config/linear/env fallback
+	try {
+		const envFile = spawnSync("sh", ["-c", `source ~/.config/linear/env 2>/dev/null && echo "$${name}"`],
+			{ encoding: "utf-8", timeout: 2000 });
+		if (envFile.status === 0 && envFile.stdout.trim()) {
+			process.env[name] = envFile.stdout.trim();
+			return envFile.stdout.trim();
+		}
+	} catch {}
+	return undefined;
+}
+
+function getLinearKey(): string | undefined { return resolveSecret("LINEAR_API_KEY"); }
+function getLinearTeamId(): string | undefined { return resolveSecret("LINEAR_TEAM_ID"); }
+
 function linearQuery(query: string): any | null {
-	const key = process.env.LINEAR_API_KEY;
+	const key = getLinearKey();
 	if (!key) return null;
 	try {
 		const r = spawnSync("curl", [
@@ -85,8 +112,8 @@ interface HealthData {
 function fetchHealthData(): HealthData {
 	// ── Linear ──
 	let linear: HealthData["linear"] = null;
-	const teamId = process.env.LINEAR_TEAM_ID;
-	if (process.env.LINEAR_API_KEY && teamId) {
+	const teamId = getLinearTeamId();
+	if (getLinearKey() && teamId) {
 		const data = linearQuery(`{
 			team(id: "${teamId}") {
 				activeCycle {
@@ -167,9 +194,9 @@ function fetchHealthData(): HealthData {
 
 function fetchSignals(source: string): { linear: any[]; github: any[] } {
 	const signals: { linear: any[]; github: any[] } = { linear: [], github: [] };
-	const teamId = process.env.LINEAR_TEAM_ID;
+	const teamId = getLinearTeamId();
 
-	if ((source === "linear" || source === "all") && process.env.LINEAR_API_KEY && teamId) {
+	if ((source === "linear" || source === "all") && getLinearKey() && teamId) {
 		const data = linearQuery(`{
 			issues(
 				filter: { team: { key: { eq: "${teamId}" } }, state: { type: { in: ["backlog", "unstarted"] } } }
@@ -549,12 +576,12 @@ interface ProjectStatus {
 }
 
 function fetchProjectStatus(): ProjectStatus {
-	const teamId = process.env.LINEAR_TEAM_ID;
+	const teamId = getLinearTeamId();
 	const tickets: TicketStatus[] = [];
 	const discrepancies: string[] = [];
 
 	// Fetch active Linear issues (not backlog, not cancelled)
-	if (!process.env.LINEAR_API_KEY || !teamId) {
+	if (!getLinearKey() || !teamId) {
 		return { tickets: [], discrepancies: ["LINEAR_API_KEY or LINEAR_TEAM_ID not set"] };
 	}
 
