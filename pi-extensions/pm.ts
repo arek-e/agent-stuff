@@ -68,16 +68,31 @@ function linearQuery(query: string): any | null {
 	} catch { return null; }
 }
 
+/** Resolve the project root — walk up from cwd to find .git */
+function findGitRoot(): string {
+	try {
+		const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf-8", timeout: 2000 });
+		if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
+	} catch {}
+	return process.cwd();
+}
+
+let _gitRoot: string | undefined;
+function gitRoot(): string {
+	if (!_gitRoot) _gitRoot = findGitRoot();
+	return _gitRoot;
+}
+
 function gh(...args: string[]): string | null {
 	try {
-		const r = spawnSync("gh", args, { encoding: "utf-8", timeout: 10000 });
+		const r = spawnSync("gh", args, { encoding: "utf-8", timeout: 10000, cwd: gitRoot() });
 		return r.status === 0 ? r.stdout.trim() : null;
 	} catch { return null; }
 }
 
 function gitCmd(...args: string[]): string {
 	try {
-		const r = spawnSync("git", args, { encoding: "utf-8", timeout: 5000 });
+		const r = spawnSync("git", args, { encoding: "utf-8", timeout: 5000, cwd: gitRoot() });
 		return r.status === 0 ? r.stdout.trim() : "";
 	} catch { return ""; }
 }
@@ -250,6 +265,9 @@ class BoxedOverlay implements Component {
 // ── Extension ────────────────────────────────────────────────────────────────
 
 export default function pmExtension(pi: ExtensionAPI) {
+
+	// Reset git root cache on session start (cwd may change)
+	pi.on("session_start", async () => { _gitRoot = undefined; });
 
 	// ── Tools ────────────────────────────────────────────────────────────
 
