@@ -186,26 +186,34 @@ After creating the PR, enter review feedback loop:
 		tmux("new-window", "-t", FLEET_SESSION, "-n", windowName, "-c", worktree);
 	}
 
-	// 5. Start worker in left pane
-	tmux("send-keys", "-t", `${FLEET_SESSION}:${windowName}`, `cd ${worktree} && ${PIT}`, "Enter");
+	// 5. Start worker in left pane (first pane of the window)
+	const workerTarget = `${FLEET_SESSION}:${windowName}`;
+	tmux("send-keys", "-t", workerTarget, `cd ${worktree} && ${PIT}`, "Enter");
 	await sleep(BOOT_DELAY * 1000);
 
 	// Send task to worker
-	tmux("send-keys", "-t", `${FLEET_SESSION}:${windowName}`,
+	tmux("send-keys", "-t", workerTarget,
 		`Read .pi/task.md and implement ${ticket}. Follow the lifecycle exactly — implement, create PR, then enter review loop. When approved, /loop stop.`, "Enter");
 	await sleep(2000);
-	tmux("send-keys", "-t", `${FLEET_SESSION}:${windowName}`, "/loop auto", "Enter");
+	tmux("send-keys", "-t", workerTarget, "/loop auto", "Enter");
 
-	// 6. Split pane for reviewer
-	tmux("split-window", "-h", "-t", `${FLEET_SESSION}:${windowName}`, "-c", worktree);
-	tmux("send-keys", "-t", `${FLEET_SESSION}:${windowName}.1`, `cd ${worktree} && ${PIT}`, "Enter");
+	// 6. Split pane for reviewer — the new pane becomes the active one
+	tmux("split-window", "-h", "-t", workerTarget, "-c", worktree);
+
+	// After split, the NEW pane is active. Use {last} to target the worker, no target for reviewer.
+	// But safer: capture the new pane ID directly.
+	const panesOutput = tmux("list-panes", "-t", `${FLEET_SESSION}:${windowName}`, "-F", "#{pane_id}");
+	const paneIds = panesOutput.output.split("\n").filter(Boolean);
+	const reviewerPane = paneIds[paneIds.length - 1] || `${FLEET_SESSION}:${windowName}`;
+
+	tmux("send-keys", "-t", reviewerPane, `cd ${worktree} && ${PIT}`, "Enter");
 	await sleep(BOOT_DELAY * 1000);
 
 	// Send reviewer task
-	tmux("send-keys", "-t", `${FLEET_SESSION}:${windowName}.1`,
+	tmux("send-keys", "-t", reviewerPane,
 		`You are the reviewer for ${ticket}. Read .pi/task.md to understand the ticket. Wait for a draft PR on branch ${branch}, then review it. Use 'gh pr list --state open --draft' to find it. Review the diff with 'gh pr diff'. If issues: gh pr review --request-changes. If good: gh pr review --approve, then use gh_pr_ready tool with ticketIds ["${ticket}"] to mark ready and notify in Linear. When done, /loop stop.`, "Enter");
 	await sleep(2000);
-	tmux("send-keys", "-t", `${FLEET_SESSION}:${windowName}.1`, "/loop auto", "Enter");
+	tmux("send-keys", "-t", reviewerPane, "/loop auto", "Enter");
 
 	// 7. Track the pair
 	pairs.set(ticket, {
