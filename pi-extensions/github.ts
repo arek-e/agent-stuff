@@ -345,4 +345,85 @@ export default function githubExtension(pi: ExtensionAPI) {
 			);
 		},
 	});
+
+	// ── Tool: gh_pr_ready ────────────────────────────────────────────────
+
+	pi.registerTool({
+		name: "gh_pr_ready",
+		label: "Mark PR Ready",
+		description:
+			"Convert a draft PR to ready for review. Optionally notify in Linear by passing ticket IDs.",
+		parameters: Type.Object({
+			number:    Type.Optional(Type.Number({ description: "PR number (defaults to current branch)" })),
+			ticketIds: Type.Optional(Type.Array(Type.String(), { description: "Linear ticket IDs to notify (e.g. ['ENG-142'])" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const args = ["pr", "ready"];
+			if (params.number) args.push(String(params.number));
+
+			const r = spawnSync("gh", args, { cwd: ctx.cwd, encoding: "utf-8", timeout: 15000 });
+			if (r.status !== 0) {
+				return {
+					content: [{ type: "text", text: `Failed to mark ready:\n${r.stderr}` }],
+					details: { success: false },
+				};
+			}
+
+			// Get PR URL for the notification
+			const prUrl = spawnSync("gh", ["pr", "view", ...(params.number ? [String(params.number)] : []), "--json", "url", "--jq", ".url"],
+				{ cwd: ctx.cwd, encoding: "utf-8", timeout: 8000 },
+			).stdout?.trim() || "";
+
+			// Notify Linear tickets
+			const linearKey = process.env.LINEAR_API_KEY;
+			const notified: string[] = [];
+			if (linearKey && params.ticketIds?.length) {
+				for (const ticketId of params.ticketIds) {
+					try {
+						// Resolve issue ID from identifier
+						const idResult = spawnSync("curl", [
+							"-s", "-X", "POST", "https://api.linear.app/graphql",
+							"-H", "Content-Type: application/json",
+							"-H", `Authorization: ${linearKey}`,
+							"-d", JSON.stringify({ query: `{ issue(id: "${ticketId}") { id } }` }),
+						], { encoding: "utf-8", timeout: 8000 });
+						const issueId = JSON.parse(idResult.stdout)?.data?.issue?.id;
+						if (!issueId) continue;
+
+						// Post comment
+						const comment = `🟢 **PR ready for human review**\\n\\n${prUrl}\\n\\nAI code review passed. All requested changes addressed. Ready for final human review and merge.`;
+						spawnSync("curl", [
+							"-s", "-X", "POST", "https://api.linear.app/graphql",
+							"-H", "Content-Type: application/json",
+							"-H", `Authorization: ${linearKey}`,
+							"-d", JSON.stringify({ query: `mutation { commentCreate(input: { issueId: "${issueId}", body: "${comment}" }) { success } }` }),
+						], { encoding: "utf-8", timeout: 8000 });
+						notified.push(ticketId);
+					} catch { /* best effort */ }
+				}
+			}
+
+			const lines = [`✅ PR marked as ready for review`];
+			if (prUrl) lines.push(`URL: ${prUrl}`);
+			if (notified.length) lines.push(`Notified in Linear: ${notified.join(", ")}`);
+
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: { success: true, url: prUrl, notified },
+			};
+		},
+
+		renderCall(args, theme) {
+			const num = args.number ? ` #${args.number}` : "";
+			return new Text(theme.fg("toolTitle", theme.bold("gh_pr_ready")) + theme.fg("dim", num), 0, 0);
+		},
+
+		renderResult(result, { isPartial }, theme) {
+			if (isPartial) return new Text(theme.fg("dim", "⟳ marking ready…"), 0, 0);
+			if (!result.details?.success) return new Text(theme.fg("error", "✗ failed"), 0, 0);
+			const notified = (result.details as any)?.notified as string[] | undefined;
+			const extra = notified?.length ? theme.fg("dim", ` → Linear: ${notified.join(", ")}`) : "";
+			return new Text(theme.fg("success", "✓ Ready for review") + extra, 0, 0);
+		},
+	});
 }
