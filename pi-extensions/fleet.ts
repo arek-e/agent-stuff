@@ -25,6 +25,15 @@ const PIT = "/Users/alex/bin/pi-tmux";
 const WORKTREE_BASE = `${process.env.HOME}/projects/v2`;
 const FLEET_SESSION = "fleet";    // tmux session that holds all ticket windows
 const BOOT_DELAY = 12;            // seconds to wait for pi to boot
+const MAX_CONCURRENT = 5;         // max simultaneous pairs
+
+// Resolve the project repo root — prefer teampitch, fall back to git root of cwd
+function resolveProjectRoot(cwd: string): string {
+	// Check if teampitch exists (our main project)
+	const teampitch = `${process.env.HOME}/projects/teampitch`;
+	if (existsSync(`${teampitch}/.git`)) return teampitch;
+	return gitRoot(cwd);
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,14 +114,25 @@ async function spawnPair(
 	cwd: string,
 	ctx: ExtensionContext,
 ): Promise<boolean> {
-	const root = gitRoot(cwd);
+	const root = resolveProjectRoot(cwd);
 	const branch = ticketToBranch(ticket);
 	const worktree = ticketToWorktree(ticket);
 	const windowName = ticket.toLowerCase();
 
-	// 1. Create worktree
+	// 1. Detect default branch
+	let defaultBranch = "main";
+	try {
+		const r = spawnSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], {
+			cwd: root, encoding: "utf-8", timeout: 3000,
+		});
+		if (r.status === 0 && r.stdout.trim()) {
+			defaultBranch = r.stdout.trim().replace("origin/", "");
+		}
+	} catch {}
+
+	// 2. Create worktree
 	if (!existsSync(worktree)) {
-		const r = spawnSync("git", ["worktree", "add", worktree, "-b", branch, "main"], {
+		const r = spawnSync("git", ["worktree", "add", worktree, "-b", branch, defaultBranch], {
 			cwd: root, encoding: "utf-8", timeout: 10000,
 		});
 		if (r.status !== 0) {
@@ -324,7 +344,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	pi.registerCommand("spawn-cycle", {
 		description: "Spawn agent pairs for all unstarted cycle tickets. Usage: /spawn-cycle [max]",
 		async handler(args, ctx) {
-			const max = parseInt(args.trim() || "5", 10);
+			const max = Math.min(parseInt(args.trim() || "5", 10), MAX_CONCURRENT);
 			const tickets = fetchCycleTickets();
 
 			if (tickets.length === 0) {
@@ -332,12 +352,22 @@ export default function fleetExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const toSpawn = tickets.filter(t => !pairs.has(t.identifier)).slice(0, max);
-			ctx.ui.notify(`Spawning ${toSpawn.length} agent pairs from cycle...`, "info");
+			const available = MAX_CONCURRENT - pairs.size;
+			if (available <= 0) {
+				ctx.ui.notify(`Fleet full (${pairs.size}/${MAX_CONCURRENT}). Use /fleet stop to free slots.`, "warning");
+				return;
+			}
+
+			const toSpawn = tickets.filter(t => !pairs.has(t.identifier)).slice(0, Math.min(max, available));
+			ctx.ui.notify(`Spawning ${toSpawn.length} agent pairs from cycle (limit: ${MAX_CONCURRENT})...`, "info");
 
 			for (const t of toSpawn) {
+				if (pairs.size >= MAX_CONCURRENT) {
+					ctx.ui.notify(`Hit limit (${MAX_CONCURRENT}). Stopping.`, "warning");
+					break;
+				}
 				const ok = await spawnPair(t.identifier, t.title, t.description, ctx.cwd, ctx);
-				if (ok) ctx.ui.notify(`✓ ${t.identifier} — spawned`, "info");
+				if (ok) ctx.ui.notify(`✓ ${t.identifier} — spawned (${pairs.size}/${MAX_CONCURRENT})`, "info");
 				else ctx.ui.notify(`✗ ${t.identifier} — failed`, "error");
 				await sleep(2000);
 			}
@@ -351,20 +381,31 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	pi.registerCommand("spawn-backlog", {
 		description: "Spawn agent pairs for top N backlog items. Usage: /spawn-backlog [count]",
 		async handler(args, ctx) {
-			const count = parseInt(args.trim() || "3", 10);
-			const tickets = fetchTopBacklog(count);
+			const count = Math.min(parseInt(args.trim() || "3", 10), MAX_CONCURRENT);
+			const tickets = fetchTopBacklog(count + pairs.size); // fetch extra to account for already-running
 
 			if (tickets.length === 0) {
 				ctx.ui.notify("No backlog tickets found", "warning");
 				return;
 			}
 
-			ctx.ui.notify(`Spawning ${tickets.length} agent pairs from backlog...`, "info");
+			const available = MAX_CONCURRENT - pairs.size;
+			if (available <= 0) {
+				ctx.ui.notify(`Fleet full (${pairs.size}/${MAX_CONCURRENT}). Use /fleet stop to free slots.`, "warning");
+				return;
+			}
 
-			for (const t of tickets) {
-				if (pairs.has(t.identifier)) continue;
+			const toSpawn = tickets.filter(t => !pairs.has(t.identifier)).slice(0, Math.min(count, available));
+			ctx.ui.notify(`Spawning ${toSpawn.length} agent pairs from backlog (limit: ${MAX_CONCURRENT})...`, "info");
+
+			for (const t of toSpawn) {
+				if (pairs.size >= MAX_CONCURRENT) {
+					ctx.ui.notify(`Hit limit (${MAX_CONCURRENT}). Stopping.`, "warning");
+					break;
+				}
 				const ok = await spawnPair(t.identifier, t.title, t.description || "", ctx.cwd, ctx);
-				if (ok) ctx.ui.notify(`✓ ${t.identifier} — spawned`, "info");
+				if (ok) ctx.ui.notify(`✓ ${t.identifier} — spawned (${pairs.size}/${MAX_CONCURRENT})`, "info");
+				else ctx.ui.notify(`✗ ${t.identifier} — failed`, "error");
 				await sleep(2000);
 			}
 		},
