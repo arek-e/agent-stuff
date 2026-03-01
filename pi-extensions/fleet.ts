@@ -287,15 +287,11 @@ export default function fleetExtension(pi: ExtensionAPI) {
 
 	// ── /spawn <ticket> ──────────────────────────────────────────────────
 
-	pi.registerCommand({
-		name: "spawn",
-		description: "Spawn a worker+reviewer agent pair for a ticket",
-		parameters: [
-			{ name: "ticket", description: "Ticket ID (e.g. ENG-142)", required: true },
-		],
-		async execute(args, ctx) {
-			const ticket = args.ticket?.toUpperCase();
-			if (!ticket) {
+	pi.registerCommand("spawn", {
+		description: "Spawn worker+reviewer pair for a ticket. Usage: /spawn ENG-142",
+		async handler(args, ctx) {
+			const ticket = args.trim().toUpperCase();
+			if (!ticket || !ticket.match(/^[A-Z]+-\d+$/)) {
 				ctx.ui.notify("Usage: /spawn ENG-142", "error");
 				return;
 			}
@@ -322,14 +318,10 @@ export default function fleetExtension(pi: ExtensionAPI) {
 
 	// ── /spawn-cycle ─────────────────────────────────────────────────────
 
-	pi.registerCommand({
-		name: "spawn-cycle",
-		description: "Spawn agent pairs for all unstarted tickets in the current cycle",
-		parameters: [
-			{ name: "max", description: "Max concurrent pairs (default: 5)", required: false },
-		],
-		async execute(args, ctx) {
-			const max = parseInt(args.max || "5", 10);
+	pi.registerCommand("spawn-cycle", {
+		description: "Spawn agent pairs for all unstarted cycle tickets. Usage: /spawn-cycle [max]",
+		async handler(args, ctx) {
+			const max = parseInt(args.trim() || "5", 10);
 			const tickets = fetchCycleTickets();
 
 			if (tickets.length === 0) {
@@ -344,7 +336,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 				const ok = await spawnPair(t.identifier, t.title, t.description, ctx.cwd, ctx);
 				if (ok) ctx.ui.notify(`✓ ${t.identifier} — spawned`, "info");
 				else ctx.ui.notify(`✗ ${t.identifier} — failed`, "error");
-				await sleep(2000); // stagger launches
+				await sleep(2000);
 			}
 
 			ctx.ui.notify(`Fleet: ${pairs.size} pairs running`, "info");
@@ -353,14 +345,10 @@ export default function fleetExtension(pi: ExtensionAPI) {
 
 	// ── /spawn-backlog <n> ───────────────────────────────────────────────
 
-	pi.registerCommand({
-		name: "spawn-backlog",
-		description: "Spawn agent pairs for the top N priority backlog items",
-		parameters: [
-			{ name: "count", description: "Number of tickets (default: 3)", required: false },
-		],
-		async execute(args, ctx) {
-			const count = parseInt(args.count || "3", 10);
+	pi.registerCommand("spawn-backlog", {
+		description: "Spawn agent pairs for top N backlog items. Usage: /spawn-backlog [count]",
+		async handler(args, ctx) {
+			const count = parseInt(args.trim() || "3", 10);
 			const tickets = fetchTopBacklog(count);
 
 			if (tickets.length === 0) {
@@ -381,18 +369,17 @@ export default function fleetExtension(pi: ExtensionAPI) {
 
 	// ── /fleet [stop] [ticket] ───────────────────────────────────────────
 
-	pi.registerCommand({
-		name: "fleet",
-		description: "Show fleet status, or 'fleet stop [ticket]' to stop agents",
-		parameters: [
-			{ name: "action", description: "'stop' to stop agents, omit for status", required: false },
-			{ name: "ticket", description: "Specific ticket to stop", required: false },
-		],
-		async execute(args, ctx) {
-			if (args.action === "stop") {
-				if (args.ticket) {
-					const ok = stopPair(args.ticket.toUpperCase());
-					ctx.ui.notify(ok ? `Stopped ${args.ticket}` : `${args.ticket} not found`, ok ? "info" : "warning");
+	pi.registerCommand("fleet", {
+		description: "Fleet status. Usage: /fleet | /fleet stop | /fleet stop ENG-142",
+		async handler(args, ctx) {
+			const parts = args.trim().split(/\s+/);
+			const action = parts[0]?.toLowerCase();
+			const ticket = parts[1]?.toUpperCase();
+
+			if (action === "stop") {
+				if (ticket) {
+					const ok = stopPair(ticket);
+					ctx.ui.notify(ok ? `Stopped ${ticket}` : `${ticket} not found`, ok ? "info" : "warning");
 				} else {
 					const tickets = [...pairs.keys()];
 					for (const t of tickets) stopPair(t);
