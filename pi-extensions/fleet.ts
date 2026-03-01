@@ -228,14 +228,17 @@ function fetchTopBacklog(n: number): Array<{ identifier: string; title: string; 
 	if (!teamId) return [];
 	const data = linearQuery(`{
 		team(id: "${teamId}") {
-			issues(first: ${n}, filter: {
+			issues(first: 50, filter: {
 				state: { type: { in: ["backlog", "unstarted"] } }
-			}, orderBy: priority) {
+			}, orderBy: updatedAt) {
 				nodes { identifier title description priority }
 			}
 		}
 	}`);
-	return data?.team?.issues?.nodes || [];
+	const nodes: Array<{ identifier: string; title: string; description: string; priority: number }> = data?.team?.issues?.nodes || [];
+	// Sort by priority client-side (1=urgent, 2=high, 3=medium, 4=low, 0=none→last)
+	nodes.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+	return nodes.slice(0, n);
 }
 
 // ── Core: Check fleet status ─────────────────────────────────────────────────
